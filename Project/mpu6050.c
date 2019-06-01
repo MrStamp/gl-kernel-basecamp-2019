@@ -8,9 +8,16 @@
 #include <linux/gpio.h>
 #include <linux/interrupt.h>
 
+#include <linux/kthread.h>
+#include <linux/mutex.h>
+#include <linux/delay.h>
+
 #include "mpu6050-regs.h"
 
 #define ACCURACY 1000
+
+static struct task_struct *master_thread;
+static struct mutex data_lock;
 
 static unsigned int interrupt_pin = GPIO_INTERRUPT;
 static unsigned int irqNumber;
@@ -131,7 +138,7 @@ static struct i2c_driver mpu6050_i2c_driver = {
 
 static irq_handler_t irqHandler(unsigned int irq, void *dev_id, struct pt_regs *regs)
 {
-	mpu6050_read_data();
+
 	printk("Device moved! Interrupt is called\n");
 	return (irq_handler_t)IRQ_HANDLED;
 }
@@ -171,6 +178,21 @@ static ssize_t steps_show(struct class *class,
 	return strlen(buf);
 }
 
+static int master_fun(void *args)
+{
+	while (!kthread_should_stop()) {
+
+		if (mutex_trylock(&data_lock)) {
+		mpu6050_read_data();
+		mutex_unlock(&data_lock);
+		}
+
+		mdelay(800);
+	}
+
+	return 0;
+}
+
 static struct class_attribute class_attr_accel_x = __ATTR(accel_x, 0444, &accel_x_show, NULL);
 static struct class_attribute class_attr_accel_y = __ATTR(accel_y, 0444, &accel_y_show, NULL);
 static struct class_attribute class_attr_accel_z = __ATTR(accel_z, 0444, &accel_z_show, NULL);
@@ -189,6 +211,8 @@ static int mpu6050_init(void)
 		return ret;
 	}
 	pr_info("mpu6050: i2c driver created\n");
+
+	master_thread = kthread_run(master_fun, NULL, "master_thread");
 
 	gpio_request(interrupt_pin, "fancy label");
 	gpio_direction_input(interrupt_pin);
@@ -244,6 +268,7 @@ static int mpu6050_init(void)
 
 static void mpu6050_exit(void)
 {
+	kthread_stop(master_thread);
 	if (attr_class) {
 		class_remove_file(attr_class, &class_attr_accel_x);
 		class_remove_file(attr_class, &class_attr_accel_y);
