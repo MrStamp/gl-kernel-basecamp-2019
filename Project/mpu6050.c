@@ -7,29 +7,44 @@
 
 #include "mpu6050-regs.h"
 
-
+#define ACCURACY 1000
 
 struct mpu6050_data {
 	struct i2c_client *drv_client;
 	int accel_values[3];
+	int old_accel_values[3];
+	int steps;
 };
 
 static struct mpu6050_data g_mpu6050_data;
 
 static int mpu6050_read_data(void)
 {
+	int sum = 0;
 	struct i2c_client *drv_client = g_mpu6050_data.drv_client;
 	if (drv_client == 0)
 		return -ENODEV;
+	/* save old accel values to predict false movement*/
+	g_mpu6050_data.old_accel_values[0] = g_mpu6050_data.accel_values[0];
+	g_mpu6050_data.old_accel_values[1] = g_mpu6050_data.accel_values[1];
+	g_mpu6050_data.old_accel_values[2] = g_mpu6050_data.accel_values[2];
 	/* accel */
 	g_mpu6050_data.accel_values[0] = (s16)((u16)i2c_smbus_read_word_swapped(drv_client, REG_ACCEL_XOUT_H));
 	g_mpu6050_data.accel_values[1] = (s16)((u16)i2c_smbus_read_word_swapped(drv_client, REG_ACCEL_YOUT_H));
 	g_mpu6050_data.accel_values[2] = (s16)((u16)i2c_smbus_read_word_swapped(drv_client, REG_ACCEL_ZOUT_H));
+	sum = g_mpu6050_data.accel_values[0] + g_mpu6050_data.accel_values[1] + g_mpu6050_data.accel_values[2];
+
+	if (sum <= 0) {
+	if ((g_mpu6050_data.accel_values[0]-g_mpu6050_data.old_accel_values[0]) > ACCURACY || (g_mpu6050_data.accel_values[1]-g_mpu6050_data.old_accel_values[1]) > ACCURACY || (g_mpu6050_data.accel_values[2]-g_mpu6050_data.old_accel_values[2]) > ACCURACY)
+	g_mpu6050_data.steps += 1;
+	}
+
 	dev_info(&drv_client->dev, "sensor data read:\n");
 	dev_info(&drv_client->dev, "ACCEL[X,Y,Z] = [%d, %d, %d]\n",
 		g_mpu6050_data.accel_values[0],
 		g_mpu6050_data.accel_values[1],
 		g_mpu6050_data.accel_values[2]);
+	dev_info(&drv_client->dev, "STEPS = %d\n", g_mpu6050_data.steps/2);
 	return 0;
 }
 
@@ -135,10 +150,19 @@ static ssize_t accel_z_show(struct class *class,
 	return strlen(buf);
 }
 
+static ssize_t steps_show(struct class *class,
+			 struct class_attribute *attr, char *buf)
+{
+	mpu6050_read_data();
+
+	sprintf(buf, "%d\n", g_mpu6050_data.steps/2);
+	return strlen(buf);
+}
 
 static struct class_attribute class_attr_accel_x = __ATTR(accel_x, 0444, &accel_x_show, NULL);
 static struct class_attribute class_attr_accel_y = __ATTR(accel_y, 0444, &accel_y_show, NULL);
 static struct class_attribute class_attr_accel_z = __ATTR(accel_z, 0444, &accel_z_show, NULL);
+static struct class_attribute class_attr_steps = __ATTR(steps, 0444, &steps_show, NULL);
 
 static struct class *attr_class;
 
@@ -183,6 +207,12 @@ static int mpu6050_init(void)
 		pr_err("mpu6050: failed to create sysfs class attribute accel_z: %d\n", ret);
 		return ret;
 	}
+	/* Create steps */
+	ret = class_create_file(attr_class, &class_attr_steps);
+	if (ret) {
+		pr_err("mpu6050: failed to create sysfs class attribute steps: %d\n", ret);
+		return ret;
+	}
 	pr_info("mpu6050: sysfs class attributes created\n");
 	pr_info("mpu6050: module loaded\n");
 	return 0;
@@ -194,6 +224,7 @@ static void mpu6050_exit(void)
 		class_remove_file(attr_class, &class_attr_accel_x);
 		class_remove_file(attr_class, &class_attr_accel_y);
 		class_remove_file(attr_class, &class_attr_accel_z);
+		class_remove_file(attr_class, &class_attr_steps);
 		pr_info("mpu6050: sysfs class attributes removed\n");
 		class_destroy(attr_class);
 		pr_info("mpu6050: sysfs class destroyed\n");
