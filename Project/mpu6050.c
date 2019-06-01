@@ -5,9 +5,16 @@
 #include <linux/i2c.h>
 #include <linux/i2c-dev.h>
 
+#include <linux/gpio.h>
+#include <linux/interrupt.h>
+
 #include "mpu6050-regs.h"
 
 #define ACCURACY 1000
+
+static unsigned int interrupt_pin = GPIO_INTERRUPT;
+static unsigned int irqNumber;
+static irq_handler_t irqHandler(unsigned int irq, void *dev_id, struct pt_regs *regs);
 
 struct mpu6050_data {
 	struct i2c_client *drv_client;
@@ -122,6 +129,12 @@ static struct i2c_driver mpu6050_i2c_driver = {
 	.id_table = mpu6050_idtable,
 };
 
+static irq_handler_t irqHandler(unsigned int irq, void *dev_id, struct pt_regs *regs)
+{
+	mpu6050_read_data();
+	printk("Device moved! Interrupt is called\n");
+	return (irq_handler_t)IRQ_HANDLED;
+}
 
 static ssize_t accel_x_show(struct class *class,
 			    struct class_attribute *attr, char *buf)
@@ -153,7 +166,6 @@ static ssize_t accel_z_show(struct class *class,
 static ssize_t steps_show(struct class *class,
 			 struct class_attribute *attr, char *buf)
 {
-	mpu6050_read_data();
 
 	sprintf(buf, "%d\n", g_mpu6050_data.steps/2);
 	return strlen(buf);
@@ -178,6 +190,18 @@ static int mpu6050_init(void)
 	}
 	pr_info("mpu6050: i2c driver created\n");
 
+	gpio_request(interrupt_pin, "fancy label");
+	gpio_direction_input(interrupt_pin);
+	gpio_set_debounce(interrupt_pin, 50);
+	gpio_export(interrupt_pin, false);
+
+	irqNumber = gpio_to_irq(interrupt_pin);
+
+	ret = request_irq(irqNumber, (irq_handler_t) irqHandler, IRQF_TRIGGER_RISING, "mpu6050Handler", NULL);
+	if (ret) {
+		printk(KERN_ERR "mpu6050: Failed to request irq\n");
+		return ret;
+	}
 	/* Create class */
 	attr_class = class_create(THIS_MODULE, "mpu6050");
 	if (IS_ERR(attr_class)) {
@@ -229,6 +253,8 @@ static void mpu6050_exit(void)
 		class_destroy(attr_class);
 		pr_info("mpu6050: sysfs class destroyed\n");
 	}
+	free_irq(irqNumber, NULL);
+	gpio_free(interrupt_pin);
 	i2c_del_driver(&mpu6050_i2c_driver);
 	pr_info("mpu6050: i2c driver deleted\n");
 	pr_info("mpu6050: module exited\n");
