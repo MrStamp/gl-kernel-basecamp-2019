@@ -12,6 +12,8 @@
 #include <linux/mutex.h>
 #include <linux/delay.h>
 
+#include <linux/moduleparam.h>
+
 #include "mpu6050-regs.h"
 
 #define ACCURACY 1000
@@ -19,6 +21,8 @@
 static struct task_struct *master_thread;
 static struct mutex data_lock;
 
+static int delay = 800;
+module_param(delay, int, 0444);
 static unsigned int interrupt_pin = GPIO_INTERRUPT;
 static unsigned int irqNumber;
 static irq_handler_t irqHandler(unsigned int irq, void *dev_id, struct pt_regs *regs);
@@ -187,7 +191,7 @@ static int master_fun(void *args)
 		mutex_unlock(&data_lock);
 		}
 
-		mdelay(800);
+		mdelay(delay);
 	}
 
 	return 0;
